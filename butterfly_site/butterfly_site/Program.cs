@@ -1,13 +1,12 @@
 ﻿using ButterflySite.Models;
 using ButterflySite.Services;
-using Microsoft.Extensions.Options;
 using Microsoft.Extensions.FileProviders;
-using System.IO;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.Configure<ModelOptions>(builder.Configuration.GetSection(ModelOptions.SectionName));
 builder.Services.Configure<QdrantOptions>(builder.Configuration.GetSection(QdrantOptions.SectionName));
+builder.Services.Configure<SearchOptions>(builder.Configuration.GetSection(SearchOptions.SectionName));
 
 builder.Services.AddSingleton<EmbeddingService>();
 builder.Services.AddSingleton<QdrantSearchService>();
@@ -15,66 +14,76 @@ builder.Services.AddSingleton<LocalSearchService>();
 
 var app = builder.Build();
 
-app.UseStaticFiles();
+var logger = app.Logger;
 
 // Раздаём папку data под /images, чтобы локальные картинки были доступны.
-// Если папки нет — создаём её, чтобы PhysicalFileProvider не вызывал исключение.
-var imagesPath = Path.Combine(builder.Environment.ContentRootPath, "data");
-if (!Directory.Exists(imagesPath))
+var imagesPath = Path.Combine(app.Environment.ContentRootPath, "data");
+if (Directory.Exists(imagesPath))
 {
-    Directory.CreateDirectory(imagesPath);
+    app.UseStaticFiles(new StaticFileOptions
+    {
+        FileProvider = new PhysicalFileProvider(imagesPath),
+        RequestPath = "/images"
+    });
 }
-
-app.UseStaticFiles(new StaticFileOptions
+else
 {
-    FileProvider = new PhysicalFileProvider(imagesPath),
-    RequestPath = "/images"
-});
+    logger.LogWarning("Folder 'data' not found at {Path}. Local images won't be available.", imagesPath);
+}
 
 app.MapGet("/", () => Results.Content(HtmlTemplates.UploadForm, "text/html; charset=utf-8"));
 
-app.MapPost("/search", async (HttpRequest request, EmbeddingService embeddingService, QdrantSearchService searchService, LocalSearchService localSearchService) =>
+app.MapPost("/search", async (
+    HttpRequest request,
+    EmbeddingService embeddingService,
+    QdrantSearchService qdrant,
+    LocalSearchService local,
+    Microsoft.Extensions.Options.IOptions<SearchOptions> searchOpt) =>
 {
     if (!request.HasFormContentType)
-    {
         return Results.BadRequest("Expected multipart form data.");
-    }
 
     var form = await request.ReadFormAsync();
     var file = form.Files.FirstOrDefault();
     if (file is null || file.Length == 0)
-    {
         return Results.BadRequest("Upload an image file.");
-    }
 
     await using var stream = file.OpenReadStream();
     var embedding = await embeddingService.GetEmbeddingAsync(stream);
 
-    // Инициализируем пустой список, чтобы избежать предупреждений нуллабильности
-    IReadOnlyList<SimilarityResult> results = Array.Empty<SimilarityResult>();
+    IReadOnlyList<SimilarityResult> results;
 
-    // Сначала пробуем Qdrant; если что-то не так — fallback на локальный поиск
-    try
+    // Режим поиска: local | qdrant | auto
+    var mode = (searchOpt.Value.Mode ?? "auto").ToLowerInvariant();
+
+    if (mode == "local")
     {
-        results = await searchService.SearchAsync(embedding, limit: 5);
+        results = await local.SearchAsync(embedding, limit: 5);
     }
-    catch
+    else if (mode == "qdrant")
     {
-        results = await localSearchService.SearchAsync(embedding, limit: 5);
+        results = await qdrant.SearchAsync(embedding, limit: 5);
+    }
+    else // auto
+    {
+        try
+        {
+            results = await qdrant.SearchAsync(embedding, limit: 5);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Qdrant search failed, falling back to local search.");
+            results = await local.SearchAsync(embedding, limit: 5);
+        }
     }
 
-    // Вычисляем предсказанный класс:
+    // Предсказанный класс — большинство среди топ-5 (как у тебя сейчас)
     string predictedSpecies = "Unknown";
-    if (results != null && results.Count > 0)
+    if (results.Count > 0)
     {
         var grouped = results
             .GroupBy(r => r.Species ?? "Unknown")
-            .Select(g => new
-            {
-                Species = g.Key,
-                Count = g.Count(),
-                ScoreSum = g.Sum(x => x.Score)
-            })
+            .Select(g => new { Species = g.Key, Count = g.Count(), ScoreSum = g.Sum(x => x.Score) })
             .OrderByDescending(x => x.Count)
             .ThenByDescending(x => x.ScoreSum)
             .First();
@@ -84,6 +93,18 @@ app.MapPost("/search", async (HttpRequest request, EmbeddingService embeddingSer
 
     var page = HtmlTemplates.RenderResults(results, predictedSpecies);
     return Results.Content(page, "text/html; charset=utf-8");
+});
+
+app.MapGet("/health", (Microsoft.Extensions.Options.IOptions<ModelOptions> m) =>
+{
+    var modelOk = File.Exists(m.Value.OnnxPath);
+    return Results.Json(new
+    {
+        ok = modelOk,
+        modelPath = m.Value.OnnxPath,
+        modelExists = modelOk,
+        dataExists = Directory.Exists(imagesPath)
+    });
 });
 
 app.Run();
@@ -159,4 +180,10 @@ static class HtmlTemplates
 </body>
 </html>";
     }
+}
+
+public sealed class SearchOptions
+{
+    public const string SectionName = "Search";
+    public string? Mode { get; init; } = "auto";
 }
