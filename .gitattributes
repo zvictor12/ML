@@ -1,3 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
 mushroom_classification/*.pth filter=lfs diff=lfs merge=lfs -text
+/butterfly_site/models/* filter=lfs diff=lfs merge=lfs -text
+/butterfly_site/data/* filter=lfs diff=lfs merge=lfs -text

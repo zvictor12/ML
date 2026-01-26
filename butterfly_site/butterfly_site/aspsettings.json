@@ -1,0 +1,10 @@
+{
+  "Model": {
+    "OnnxPath": "models/butterfly.onnx",
+    "EmbeddingSize": 1280
+  },
+  "Qdrant": {
+    "Url": "http://localhost:6333",
+    "CollectionName": "butterflies"
+  }
+}

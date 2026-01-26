@@ -1,0 +1,27 @@
+version: "3.9"
+
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.9.1
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+
+  web:
+    build:
+      context: .
+      dockerfile: butterfly_site/Dockerfile
+    environment:
+      - Qdrant__Url=http://qdrant:6333
+      - Model__OnnxPath=/app/models/butterfly.onnx
+      - Model__EmbeddingSize=1280
+    volumes:
+      - ./models:/app/models:ro
+    ports:
+      - "8080:8080"
+    depends_on:
+      - qdrant
+
+volumes:
+  qdrant_storage:
