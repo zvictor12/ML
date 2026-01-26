@@ -7,6 +7,13 @@ import numpy as np
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+IMAGES_PER_SPECIES = 5
+
+
+def sort_key(value: str):
+    return (0, int(value)) if value.isdigit() else (1, value.lower())
+
 
 def load_csv_metadata(path: Path):
     if not path.exists():
@@ -48,6 +55,7 @@ def main():
     parser.add_argument("--embeddings", required=True, help="Path to .npy embeddings")
     parser.add_argument("--metadata", help="Optional CSV with id,species,image_url")
     parser.add_argument("--metadata-jsonl", help="Optional JSONL with id,species,image_url")
+    parser.add_argument("--images-dir", help="Optional directory with images to build payloads")
     parser.add_argument("--collection", default="butterflies")
     parser.add_argument("--url", default="http://localhost:6333")
     args = parser.parse_args()
@@ -62,6 +70,22 @@ def main():
     if args.metadata_jsonl:
         metadata.update(load_jsonl_metadata(Path(args.metadata_jsonl)))
 
+    folders = []
+    images_by_folder = []
+    if args.images_dir:
+        images_root = Path(args.images_dir)
+        if images_root.exists():
+            folders = sorted(
+                [p for p in images_root.iterdir() if p.is_dir()],
+                key=lambda p: sort_key(p.name),
+            )
+            for folder in folders:
+                images = sorted(
+                    [p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS],
+                    key=lambda p: sort_key(p.stem),
+                )
+                images_by_folder.append(images)
+
     client = QdrantClient(url=args.url)
     vector_size = embeddings.shape[1]
 
@@ -74,6 +98,16 @@ def main():
     points = []
     for index, vector in enumerate(embeddings):
         payload = metadata.get(str(index), {"species": "Unknown"})
+        if folders:
+            folder_index = index // IMAGES_PER_SPECIES
+            image_index = index % IMAGES_PER_SPECIES
+            if folder_index < len(folders) and image_index < len(images_by_folder[folder_index]):
+                image_path = images_by_folder[folder_index][image_index]
+                if "species" not in payload or payload["species"] == "Unknown":
+                    payload["species"] = folders[folder_index].name
+                if not payload.get("image_url"):
+                    relative_path = image_path.relative_to(images_root).as_posix()
+                    payload["image_url"] = f"/images/{relative_path}"
         points.append(models.PointStruct(id=index, vector=vector.tolist(), payload=payload))
 
     client.upsert(collection_name=args.collection, points=points)
