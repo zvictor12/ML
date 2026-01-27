@@ -3,3 +3,4 @@
 mushroom_classification/*.pth filter=lfs diff=lfs merge=lfs -text
 /butterfly_site/models/* filter=lfs diff=lfs merge=lfs -text
 /butterfly_site/data/* filter=lfs diff=lfs merge=lfs -text
+/Faulkner-RNN/*.pt filter=lfs diff=lfs merge=lfs -text
