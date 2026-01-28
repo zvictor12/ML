@@ -18,8 +18,6 @@ public sealed class QdrantSearchService
 
     public async Task<IReadOnlyList<SimilarityResult>> SearchAsync(float[] vector, int limit)
     {
-        // Exact=true полезно для диагностики (self-search должен давать ~1),
-        // и убирает “рандом” approximate HNSW.
         var searchParams = new SearchParams
         {
             Exact = true
@@ -34,18 +32,10 @@ public sealed class QdrantSearchService
 
         return results.Select(point =>
         {
-            // Поддержка двух схем payload:
-            // 1) species/image_url (как ожидал код)
-            // 2) label (как у тебя в metadata.jsonl)
             var species =
-                GetPayloadString(point.Payload, "species") ??
-                GetPayloadString(point.Payload, "label") ??
-                "Unknown";
+                GetPayloadString(point.Payload, "species") ?? "Unknown";
 
-            var imageUrl =
-                GetPayloadString(point.Payload, "image_url") ??
-                GetPayloadString(point.Payload, "img") ??
-                GetPayloadString(point.Payload, "path"); // на всякий случай
+            var imageUrl = GetPayloadString(point.Payload, "image_url");
 
             return new SimilarityResult(
                 Species: species,
@@ -64,7 +54,6 @@ public sealed class QdrantSearchService
             Value.KindOneofCase.StringValue => value.StringValue,
             Value.KindOneofCase.IntegerValue => value.IntegerValue.ToString(),
             Value.KindOneofCase.DoubleValue => value.DoubleValue.ToString("G"),
-            Value.KindOneofCase.BoolValue => value.BoolValue.ToString(),
             _ => null
         };
     }

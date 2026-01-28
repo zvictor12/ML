@@ -6,11 +6,9 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.Configure<ModelOptions>(builder.Configuration.GetSection(ModelOptions.SectionName));
 builder.Services.Configure<QdrantOptions>(builder.Configuration.GetSection(QdrantOptions.SectionName));
-builder.Services.Configure<SearchOptions>(builder.Configuration.GetSection(SearchOptions.SectionName));
 
 builder.Services.AddSingleton<EmbeddingService>();
 builder.Services.AddSingleton<QdrantSearchService>();
-builder.Services.AddSingleton<LocalSearchService>();
 
 var app = builder.Build();
 
@@ -36,9 +34,7 @@ app.MapGet("/", () => Results.Content(HtmlTemplates.UploadForm, "text/html; char
 app.MapPost("/search", async (
     HttpRequest request,
     EmbeddingService embeddingService,
-    QdrantSearchService qdrant,
-    LocalSearchService local,
-    Microsoft.Extensions.Options.IOptions<SearchOptions> searchOpt) =>
+    QdrantSearchService qdrant) =>
 {
     if (!request.HasFormContentType)
         return Results.BadRequest("Expected multipart form data.");
@@ -52,32 +48,9 @@ app.MapPost("/search", async (
     var embedding = await embeddingService.GetEmbeddingAsync(stream);
 
     IReadOnlyList<SimilarityResult> results;
+    results = await qdrant.SearchAsync(embedding, limit: 5);
 
-    // Режим поиска: local | qdrant | auto
-    var mode = (searchOpt.Value.Mode ?? "auto").ToLowerInvariant();
-
-    if (mode == "local")
-    {
-        results = await local.SearchAsync(embedding, limit: 5);
-    }
-    else if (mode == "qdrant")
-    {
-        results = await qdrant.SearchAsync(embedding, limit: 5);
-    }
-    else // auto
-    {
-        try
-        {
-            results = await qdrant.SearchAsync(embedding, limit: 5);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Qdrant search failed, falling back to local search.");
-            results = await local.SearchAsync(embedding, limit: 5);
-        }
-    }
-
-    // Предсказанный класс — большинство среди топ-5 (как у тебя сейчас)
+    // Предсказанный класс — большинство среди топ-5
     string predictedSpecies = "Unknown";
     if (results.Count > 0)
     {
@@ -150,7 +123,7 @@ static class HtmlTemplates
 <div class="card">
   {imageHtml}
   <div class="label">{result.Species}</div>
-  <div>Сходство: {result.Score:F3}</div>
+  <div>Сходство: {result.Score:F5}</div>
 </div>
 """;
         }));
@@ -180,10 +153,4 @@ static class HtmlTemplates
 </body>
 </html>";
     }
-}
-
-public sealed class SearchOptions
-{
-    public const string SectionName = "Search";
-    public string? Mode { get; init; } = "auto";
 }

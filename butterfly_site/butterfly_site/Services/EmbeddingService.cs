@@ -31,7 +31,6 @@ public sealed class EmbeddingService
 
         Image<Rgb24> img = loaded.Clone();
 
-        // 1) Resize ТОЛЬКО если больше 224 (уменьшаем, без crop)
         if (img.Width > target || img.Height > target)
         {
             img.Mutate(x => x.Resize(new ResizeOptions
@@ -41,7 +40,6 @@ public sealed class EmbeddingService
             }));
         }
 
-        // 2) Если меньше 224 — pad до 224x224 (без апскейла)
         if (img.Width != target || img.Height != target)
         {
             var padded = PadToSizeCenter(img, target, target);
@@ -64,7 +62,6 @@ public sealed class EmbeddingService
 
         img.Dispose();
 
-        // Приводим к нужной длине + нормализация
         if (outArray.Length == _options.EmbeddingSize)
         {
             L2NormalizeInPlace(outArray);
@@ -91,7 +88,6 @@ public sealed class EmbeddingService
             {
                 var p = image[x, y];
 
-                // только [0..1], без ImageNet mean/std
                 float r = p.R / 255f;
                 float g = p.G / 255f;
                 float b = p.B / 255f;
@@ -120,7 +116,6 @@ public sealed class EmbeddingService
             v[i] = (float)(v[i] * inv);
     }
 
-    // Pad по центру до (dstW, dstH) без ImageSharp.Drawing и без GetPixelRowSpan
     private static Image<Rgb24> PadToSizeCenter(Image<Rgb24> src, int dstW, int dstH)
     {
         var dst = new Image<Rgb24>(dstW, dstH, new Rgb24(0, 0, 0));
